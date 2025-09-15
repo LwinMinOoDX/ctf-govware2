@@ -1,0 +1,4 @@
+Flask==2.3.3
+Pillow==10.0.1
+Mako==1.0.7
+Werkzeug==2.3.7

