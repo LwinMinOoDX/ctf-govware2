@@ -25,7 +25,7 @@ RUN useradd -m -s /bin/bash www
 RUN mkdir -p /home/www
 
 # Generate dynamic flag with 16 random hex characters
-RUN FLAG_HEX=$(openssl rand -hex 8) && \
+RUN FLAG_HEX=$(openssl rand -hex 16) && \
     echo "BCTF{0x${FLAG_HEX}}" > /home/www/flag.txt && \
     chown www:www /home/www/flag.txt && \
     chmod 644 /home/www/flag.txt
