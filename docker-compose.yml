@@ -11,3 +11,15 @@ services:
       - FLASK_ENV=production
     restart: unless-stopped
     container_name: upload_image_app
+    # Security options for www user restrictions
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/tmp
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
