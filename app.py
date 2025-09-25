@@ -10,21 +10,21 @@ import gzip
 import base64
 import json
 from functools import wraps
-import time
-from collections import defaultdict, deque
-from threading import Lock
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 app = Flask(__name__)
 
-# Rate limiting configuration
-RATE_LIMIT_REQUESTS = 5  # Max requests per second
-RATE_LIMIT_WINDOW = 1    # Time window in seconds
-RATE_LIMIT_BLOCK_TIME = 60  # Block time in seconds
-
-# Rate limiting data structures
-request_history = defaultdict(deque)  # IP -> deque of request timestamps
-blocked_ips = {}  # IP -> block expiry timestamp
-rate_limit_lock = Lock()  # Thread safety for rate limiting data
+# Initialize Flask-Limiter with IP-specific banning for one minute
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=["5 per minute"],
+    storage_uri="memory://",
+    strategy="moving-window",
+    headers_enabled=True,
+    swallow_errors=False
+)
+limiter.init_app(app)
 # app.secret_key = 'your-secret-key-here'  # Commented out to avoid session conflicts
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
@@ -91,8 +91,10 @@ def require_admin(f):
         return f(*args, **kwargs)
     return decorated_function
 
-def rate_limit_banner():
-    """Generate HTML banner for rate limiting"""
+# Custom error handler for rate limiting
+@app.errorhandler(429)
+def ratelimit_handler(e):
+    """Custom HTML response for rate limit exceeded"""
     return """
     <!DOCTYPE html>
     <html lang="en">
@@ -185,16 +187,16 @@ def rate_limit_banner():
     </head>
     <body>
         <div class="banner">
-            <div class="warning-icon">Warning</div>
+            <div class="warning-icon">⚠️</div>
             <h1>You're Banned for 1 Minute!</h1>
             <div class="message">
-                You have exceeded the rate limit of <strong>5 requests per second</strong>.
+                You have exceeded the rate limit of <strong>5 requests per minute</strong>.
                 <br>Your IP address has been temporarily blocked.
             </div>
-            <div class="countdown">Please wait 60 seconds to continue your activity</div>
+            <div class="countdown">Please wait 60 seconds to continue</div>
             <div class="info">
                 <strong>Rate Limit Policy:</strong><br>
-                • Maximum 5 requests per second per IP<br>
+                • Maximum 5 requests per minute per IP<br>
                 • Block duration: 1 minute<br>
                 • This helps protect our servers from abuse
             </div>
@@ -208,53 +210,7 @@ def rate_limit_banner():
         </script>
     </body>
     </html>
-    """
-
-def rate_limit(f):
-    """Decorator to apply rate limiting to routes"""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        # Get client IP address
-        client_ip = request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR', '127.0.0.1'))
-        if ',' in client_ip:
-            client_ip = client_ip.split(',')[0].strip()
-        
-        current_time = time.time()
-        
-        with rate_limit_lock:
-            # Check if IP is currently blocked
-            if client_ip in blocked_ips:
-                if current_time < blocked_ips[client_ip]:
-                    # Still blocked - return HTML banner
-                    response = make_response(rate_limit_banner(), 429)
-                    response.headers['Content-Type'] = 'text/html'
-                    return response
-                else:
-                    # Block expired, remove from blocked list
-                    del blocked_ips[client_ip]
-                    if client_ip in request_history:
-                        request_history[client_ip].clear()
-            
-            # Clean old requests from history (older than window)
-            if client_ip in request_history:
-                while (request_history[client_ip] and 
-                       current_time - request_history[client_ip][0] > RATE_LIMIT_WINDOW):
-                    request_history[client_ip].popleft()
-            
-            # Check if adding this request would exceed the limit
-            if len(request_history[client_ip]) >= RATE_LIMIT_REQUESTS:
-                # Block the IP - return HTML banner
-                blocked_ips[client_ip] = current_time + RATE_LIMIT_BLOCK_TIME
-                request_history[client_ip].clear()
-                response = make_response(rate_limit_banner(), 429)
-                response.headers['Content-Type'] = 'text/html'
-                return response
-            
-            # Add current request to history
-            request_history[client_ip].append(current_time)
-        
-        return f(*args, **kwargs)
-    return decorated_function
+    """, 429
 
 def allowed_file(filename):
     return '.' in filename and \
@@ -327,7 +283,7 @@ def login_template(error_message=''):
     '''
 
 @app.route('/login', methods=['GET', 'POST'])
-@rate_limit
+@limiter.limit("5 per minute", per_method=True, error_message="Rate limit exceeded. IP banned for 1 minute.")
 def login():
     if request.method == 'POST':
         username = request.form['username']
@@ -354,7 +310,7 @@ def login():
     return render_template_string(login_template())
 
 @app.route('/register', methods=['GET', 'POST'])
-@rate_limit
+@limiter.limit("5 per minute", per_method=True, error_message="Rate limit exceeded. IP banned for 1 minute.")
 def register():
     if request.method == 'POST':
         username = request.form['username']
@@ -429,7 +385,7 @@ def register_template(error_message=''):
 
 
 @app.route('/user_dashboard')
-@rate_limit
+@limiter.limit("5 per minute", per_method=True, error_message="Rate limit exceeded. IP banned for 1 minute.")
 def user_dashboard():
     session_cookie = request.cookies.get('session')
     if not session_cookie:
@@ -482,7 +438,7 @@ def user_dashboard():
     ''', username=username, role=role)
 
 @app.route('/logout')
-@rate_limit
+@limiter.limit("5 per minute", per_method=True, error_message="Rate limit exceeded. IP banned for 1 minute.")
 def logout():
     response = make_response(redirect(url_for('login')))
     response.set_cookie('session', '', expires=0)
@@ -490,7 +446,7 @@ def logout():
 
 @app.route('/')
 @require_admin
-@rate_limit
+@limiter.limit("5 per minute", per_method=True, error_message="Rate limit exceeded. IP banned for 1 minute.")
 def index():
     session_cookie = request.cookies.get('session')
     username, role = decode_session_cookie(session_cookie)
@@ -544,7 +500,7 @@ def index():
 
 @app.route('/upload', methods=['POST'])
 @require_admin
-@rate_limit
+@limiter.limit("5 per minute", per_method=True, error_message="Rate limit exceeded. IP banned for 1 minute.")
 def upload_file():
     with open('/tmp/debug.log', 'a') as f:
         f.write("DEBUG: Upload function called\n")
@@ -710,7 +666,7 @@ def upload_file():
         return redirect(url_for('index'))
 
 @app.route('/secret')
-@rate_limit
+@limiter.limit("5 per minute", per_method=True, error_message="Rate limit exceeded. IP banned for 1 minute.")
 def secret():
     return "<h1>i am just here to waste your time.</h1>"
 
