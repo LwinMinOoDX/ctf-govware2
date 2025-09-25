@@ -10,8 +10,21 @@ import gzip
 import base64
 import json
 from functools import wraps
+import time
+from collections import defaultdict, deque
+from threading import Lock
 
 app = Flask(__name__)
+
+# Rate limiting configuration
+RATE_LIMIT_REQUESTS = 5  # Max requests per second
+RATE_LIMIT_WINDOW = 1    # Time window in seconds
+RATE_LIMIT_BLOCK_TIME = 60  # Block time in seconds
+
+# Rate limiting data structures
+request_history = defaultdict(deque)  # IP -> deque of request timestamps
+blocked_ips = {}  # IP -> block expiry timestamp
+rate_limit_lock = Lock()  # Thread safety for rate limiting data
 # app.secret_key = 'your-secret-key-here'  # Commented out to avoid session conflicts
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
@@ -74,6 +87,171 @@ def require_admin(f):
         username, role = decode_session_cookie(session_cookie)
         if role != 'admin':
             return redirect(url_for('login'))
+        
+        return f(*args, **kwargs)
+    return decorated_function
+
+def rate_limit_banner():
+    """Generate HTML banner for rate limiting"""
+    return """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Rate Limit Exceeded</title>
+        <style>
+            body {
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                margin: 0;
+                padding: 0;
+                min-height: 100vh;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+            }
+            .banner {
+                background: white;
+                border-radius: 15px;
+                box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+                padding: 40px;
+                text-align: center;
+                max-width: 500px;
+                margin: 20px;
+                animation: slideIn 0.5s ease-out;
+            }
+            @keyframes slideIn {
+                from { transform: translateY(-50px); opacity: 0; }
+                to { transform: translateY(0); opacity: 1; }
+            }
+            .warning-icon {
+                font-size: 4rem;
+                color: #ff6b6b;
+                margin-bottom: 20px;
+                animation: pulse 2s infinite;
+            }
+            @keyframes pulse {
+                0%, 100% { transform: scale(1); }
+                50% { transform: scale(1.1); }
+            }
+            h1 {
+                color: #2c3e50;
+                margin-bottom: 20px;
+                font-size: 2rem;
+                font-weight: 600;
+            }
+            .message {
+                color: #555;
+                font-size: 1.1rem;
+                line-height: 1.6;
+                margin-bottom: 30px;
+            }
+            .countdown {
+                background: #ff6b6b;
+                color: white;
+                padding: 15px 30px;
+                border-radius: 25px;
+                font-size: 1.2rem;
+                font-weight: bold;
+                display: inline-block;
+                margin-bottom: 20px;
+            }
+            .info {
+                background: #f8f9fa;
+                border-left: 4px solid #007bff;
+                padding: 15px;
+                margin: 20px 0;
+                border-radius: 5px;
+                text-align: left;
+            }
+            .retry-btn {
+                background: #007bff;
+                color: white;
+                padding: 12px 30px;
+                border: none;
+                border-radius: 25px;
+                font-size: 1rem;
+                cursor: pointer;
+                transition: background 0.3s;
+                text-decoration: none;
+                display: inline-block;
+                margin-top: 20px;
+            }
+            .retry-btn:hover {
+                background: #0056b3;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="banner">
+            <div class="warning-icon">Warning</div>
+            <h1>You're Banned for 1 Minute!</h1>
+            <div class="message">
+                You have exceeded the rate limit of <strong>5 requests per second</strong>.
+                <br>Your IP address has been temporarily blocked.
+            </div>
+            <div class="countdown">Please wait 60 seconds to continue your activity</div>
+            <div class="info">
+                <strong>Rate Limit Policy:</strong><br>
+                • Maximum 5 requests per second per IP<br>
+                • Block duration: 1 minute<br>
+                • This helps protect our servers from abuse
+            </div>
+            <a href="javascript:location.reload()" class="retry-btn">Retry</a>
+        </div>
+        <script>
+            // Auto-refresh after 60 seconds
+            setTimeout(function() {
+                location.reload();
+            }, 60000);
+        </script>
+    </body>
+    </html>
+    """
+
+def rate_limit(f):
+    """Decorator to apply rate limiting to routes"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # Get client IP address
+        client_ip = request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR', '127.0.0.1'))
+        if ',' in client_ip:
+            client_ip = client_ip.split(',')[0].strip()
+        
+        current_time = time.time()
+        
+        with rate_limit_lock:
+            # Check if IP is currently blocked
+            if client_ip in blocked_ips:
+                if current_time < blocked_ips[client_ip]:
+                    # Still blocked - return HTML banner
+                    response = make_response(rate_limit_banner(), 429)
+                    response.headers['Content-Type'] = 'text/html'
+                    return response
+                else:
+                    # Block expired, remove from blocked list
+                    del blocked_ips[client_ip]
+                    if client_ip in request_history:
+                        request_history[client_ip].clear()
+            
+            # Clean old requests from history (older than window)
+            if client_ip in request_history:
+                while (request_history[client_ip] and 
+                       current_time - request_history[client_ip][0] > RATE_LIMIT_WINDOW):
+                    request_history[client_ip].popleft()
+            
+            # Check if adding this request would exceed the limit
+            if len(request_history[client_ip]) >= RATE_LIMIT_REQUESTS:
+                # Block the IP - return HTML banner
+                blocked_ips[client_ip] = current_time + RATE_LIMIT_BLOCK_TIME
+                request_history[client_ip].clear()
+                response = make_response(rate_limit_banner(), 429)
+                response.headers['Content-Type'] = 'text/html'
+                return response
+            
+            # Add current request to history
+            request_history[client_ip].append(current_time)
         
         return f(*args, **kwargs)
     return decorated_function
@@ -149,6 +327,7 @@ def login_template(error_message=''):
     '''
 
 @app.route('/login', methods=['GET', 'POST'])
+@rate_limit
 def login():
     if request.method == 'POST':
         username = request.form['username']
@@ -175,6 +354,7 @@ def login():
     return render_template_string(login_template())
 
 @app.route('/register', methods=['GET', 'POST'])
+@rate_limit
 def register():
     if request.method == 'POST':
         username = request.form['username']
@@ -249,6 +429,7 @@ def register_template(error_message=''):
 
 
 @app.route('/user_dashboard')
+@rate_limit
 def user_dashboard():
     session_cookie = request.cookies.get('session')
     if not session_cookie:
@@ -301,6 +482,7 @@ def user_dashboard():
     ''', username=username, role=role)
 
 @app.route('/logout')
+@rate_limit
 def logout():
     response = make_response(redirect(url_for('login')))
     response.set_cookie('session', '', expires=0)
@@ -308,6 +490,7 @@ def logout():
 
 @app.route('/')
 @require_admin
+@rate_limit
 def index():
     session_cookie = request.cookies.get('session')
     username, role = decode_session_cookie(session_cookie)
@@ -361,6 +544,7 @@ def index():
 
 @app.route('/upload', methods=['POST'])
 @require_admin
+@rate_limit
 def upload_file():
     with open('/tmp/debug.log', 'a') as f:
         f.write("DEBUG: Upload function called\n")
@@ -526,8 +710,8 @@ def upload_file():
         return redirect(url_for('index'))
 
 @app.route('/secret')
+@rate_limit
 def secret():
-    """Secret page accessible to everyone"""
     return "<h1>i am just here to waste your time.</h1>"
 
 if __name__ == '__main__':

