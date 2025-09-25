@@ -15,9 +15,38 @@ from flask_limiter.util import get_remote_address
 
 app = Flask(__name__)
 
-# Initialize Flask-Limiter with IP-specific banning for one minute
+# Custom key function to handle proxy headers for deployed platforms
+def get_real_ip():
+    """
+    Get the real client IP address, handling various proxy headers
+    used by deployment platforms like Heroku, Railway, Render, etc.
+    """
+    # Check common proxy headers in order of preference
+    headers_to_check = [
+        'X-Forwarded-For',      # Most common proxy header
+        'X-Real-IP',            # Nginx proxy header
+        'X-Client-IP',          # Apache proxy header
+        'CF-Connecting-IP',     # Cloudflare header
+        'True-Client-IP',       # Akamai header
+        'X-Cluster-Client-IP',  # Cluster proxy header
+    ]
+    
+    for header in headers_to_check:
+        ip = request.headers.get(header)
+        if ip:
+            # X-Forwarded-For can contain multiple IPs, take the first one
+            if ',' in ip:
+                ip = ip.split(',')[0].strip()
+            # Basic IP validation
+            if ip and ip != 'unknown':
+                return ip
+    
+    # Fallback to direct connection IP
+    return request.environ.get('REMOTE_ADDR', '127.0.0.1')
+
+# Initialize Flask-Limiter with custom IP detection for deployed platforms
 limiter = Limiter(
-    key_func=get_remote_address,
+    key_func=get_real_ip,
     default_limits=["5 per minute"],
     storage_uri="memory://",
     strategy="moving-window",
